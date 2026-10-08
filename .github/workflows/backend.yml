@@ -24,23 +24,41 @@ jobs:
 
     steps:
 
+      # ----------------------------------------------------------
+      # Checkout source code
+      # ----------------------------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # ----------------------------------------------------------
+      # Setup .NET
+      # ----------------------------------------------------------
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
+      # ----------------------------------------------------------
+      # Restore NuGet packages
+      # ----------------------------------------------------------
       - name: Restore
         run: dotnet restore Poc.Api.csproj
 
+      # ----------------------------------------------------------
+      # Build application
+      # ----------------------------------------------------------
       - name: Build
         run: dotnet build Poc.Api.csproj --configuration Release --no-restore
 
+      # ----------------------------------------------------------
+      # Publish application
+      # ----------------------------------------------------------
       - name: Publish
         run: dotnet publish Poc.Api.csproj --configuration Release --output ./publish --no-restore
 
+      # ----------------------------------------------------------
+      # Login to GitHub Container Registry
+      # ----------------------------------------------------------
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -48,9 +66,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ----------------------------------------------------------
+      # Build Docker image
+      # ----------------------------------------------------------
       - name: Build Docker Image
         run: docker build -t ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }} .
 
+      # ----------------------------------------------------------
+      # Push Docker image to GHCR
+      # ----------------------------------------------------------
       - name: Push Docker Image
         run: docker push ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
 
@@ -61,43 +85,134 @@ jobs:
   deploy:
     name: Deploy to Docker Server
 
+    # Wait until build job is successful
     needs: build
 
-    # Deploy only for direct push to develop
+    # Deploy ONLY for direct push to develop
+    # Pull requests will NOT deploy to the server
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
 
+    # Your Windows self-hosted runner
     runs-on: self-hosted
 
     steps:
 
-      # ----------------------------------------------------------
-      # Find Docker and add it to PATH
-      # ----------------------------------------------------------
+      # ========================================================
+      # FIND DOCKER.EXE
+      # ========================================================
       - name: Configure Docker PATH
         shell: powershell
         run: |
-          $dockerCommand = Get-Command docker.exe -ErrorAction Stop
-          $dockerPath = Split-Path $dockerCommand.Source
+          Write-Host "========================================"
+          Write-Host "Searching for Docker..."
+          Write-Host "========================================"
 
-          Write-Host "Docker executable: $($dockerCommand.Source)"
-          Write-Host "Docker path: $dockerPath"
+          Write-Host ""
+          Write-Host "Current PATH:"
+          Write-Host $env:PATH
 
+          $dockerCandidates = @(
+              "$env:ProgramFiles\Docker\Docker\resources\bin\docker.exe",
+              "$env:ProgramFiles\Docker\docker.exe",
+              "$env:ProgramFiles\Docker\cli-plugins\docker.exe",
+              "C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+              "C:\Program Files\Docker\docker.exe"
+          )
+
+          $dockerExe = $null
+
+          Write-Host ""
+          Write-Host "Checking standard Docker locations..."
+
+          foreach ($candidate in $dockerCandidates) {
+
+              Write-Host "Checking: $candidate"
+
+              if (Test-Path $candidate) {
+                  $dockerExe = $candidate
+                  Write-Host "FOUND: $dockerExe"
+                  break
+              }
+          }
+
+          # ----------------------------------------------------
+          # If Docker was not found, search Program Files
+          # ----------------------------------------------------
+          if (-not $dockerExe) {
+
+              Write-Host ""
+              Write-Host "Docker was not found in standard locations."
+              Write-Host "Searching C:\Program Files..."
+              Write-Host ""
+
+              $dockerExe = Get-ChildItem `
+                  -Path "C:\Program Files" `
+                  -Filter "docker.exe" `
+                  -Recurse `
+                  -ErrorAction SilentlyContinue |
+                  Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          # ----------------------------------------------------
+          # Fail if Docker cannot be found
+          # ----------------------------------------------------
+          if (-not $dockerExe) {
+
+              Write-Host ""
+              Write-Error "docker.exe could not be found on this server."
+              exit 1
+          }
+
+          # ----------------------------------------------------
+          # Get Docker directory
+          # ----------------------------------------------------
+          $dockerPath = Split-Path $dockerExe -Parent
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Docker executable:"
+          Write-Host $dockerExe
+          Write-Host ""
+          Write-Host "Docker directory:"
+          Write-Host $dockerPath
+          Write-Host "========================================"
+
+          # Add Docker directory to GitHub Actions PATH
           Add-Content -Path $env:GITHUB_PATH -Value $dockerPath
 
-      # ----------------------------------------------------------
-      # Verify Docker
-      # ----------------------------------------------------------
+          Write-Host ""
+          Write-Host "Docker directory added to GitHub Actions PATH."
+
+
+      # ========================================================
+      # VERIFY DOCKER
+      # ========================================================
       - name: Verify Docker
         shell: powershell
         run: |
-          Write-Host "Checking Docker..."
-          where.exe docker
-          docker --version
-          Write-Host "Docker is available."
+          Write-Host "========================================"
+          Write-Host "Verifying Docker"
+          Write-Host "========================================"
 
-      # ----------------------------------------------------------
-      # Login to GHCR
-      # ----------------------------------------------------------
+          Write-Host ""
+          Write-Host "Docker location:"
+          where.exe docker
+
+          Write-Host ""
+          Write-Host "Docker version:"
+          docker --version
+
+          Write-Host ""
+          Write-Host "Docker info:"
+          docker info --format '{{.ServerVersion}}'
+
+          Write-Host ""
+          Write-Host "Docker is working."
+
+
+      # ========================================================
+      # LOGIN TO GHCR
+      # ========================================================
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -105,45 +220,73 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ----------------------------------------------------------
-      # Pull exact image created by Build job
-      # ----------------------------------------------------------
+
+      # ========================================================
+      # PULL NEW IMAGE
+      # ========================================================
       - name: Pull Docker Image
         shell: powershell
         run: |
-          docker pull ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
+          $image = "ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}"
 
-      # ----------------------------------------------------------
-      # Stop existing container
-      # ----------------------------------------------------------
+          Write-Host "Pulling image:"
+          Write-Host $image
+
+          docker pull $image
+
+
+      # ========================================================
+      # STOP EXISTING CONTAINER
+      # ========================================================
       - name: Stop Existing Container
         shell: powershell
         run: |
+          Write-Host "Stopping existing poc-api container..."
+
           docker rm -f poc-api 2>$null
 
-      # ----------------------------------------------------------
-      # Start new container
-      # ----------------------------------------------------------
+          Write-Host "Existing poc-api container removed if it existed."
+
+
+      # ========================================================
+      # START NEW CONTAINER
+      # ========================================================
       - name: Start New Container
         shell: powershell
         run: |
+          $image = "ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}"
+
+          Write-Host "Starting new container..."
+          Write-Host "Image: $image"
+
           docker run -d `
             --name poc-api `
             --restart unless-stopped `
             -e ASPNETCORE_ENVIRONMENT=Development `
             -p 8091:8080 `
-            ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
+            $image
 
-      # ----------------------------------------------------------
-      # Verify container
-      # ----------------------------------------------------------
+
+      # ========================================================
+      # VERIFY CONTAINER
+      # ========================================================
       - name: Verify Container
         shell: powershell
         run: |
+          Write-Host "Waiting for application to start..."
+
           Start-Sleep -Seconds 5
 
-          Write-Host "===== Docker PS ====="
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Running Containers"
+          Write-Host "========================================"
+
           docker ps
 
-          Write-Host "===== Container Logs ====="
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Poc.Api Container Logs"
+          Write-Host "========================================"
+
           docker logs poc-api --tail 30
