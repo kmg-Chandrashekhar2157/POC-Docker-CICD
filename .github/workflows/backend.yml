@@ -24,44 +24,23 @@ jobs:
 
     steps:
 
-      # ----------------------------------------------------------
-      # Checkout source code
-      # ----------------------------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # Setup .NET
-      # ----------------------------------------------------------
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      # ----------------------------------------------------------
-      # Restore
-      # ----------------------------------------------------------
       - name: Restore
         run: dotnet restore Poc.Api.csproj
 
-      # ----------------------------------------------------------
-      # Build
-      # ----------------------------------------------------------
       - name: Build
         run: dotnet build Poc.Api.csproj --configuration Release --no-restore
 
-      # ----------------------------------------------------------
-      # Publish
-      # ----------------------------------------------------------
       - name: Publish
-        run: dotnet publish Poc.Api.csproj `
-          --configuration Release `
-          --output ./publish `
-          --no-restore
+        run: dotnet publish Poc.Api.csproj --configuration Release --output ./publish --no-restore
 
-      # ----------------------------------------------------------
-      # Login to GitHub Container Registry
-      # ----------------------------------------------------------
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -69,22 +48,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ----------------------------------------------------------
-      # Build Docker Image
-      # ----------------------------------------------------------
       - name: Build Docker Image
-        run: |
-          docker build `
-            -t ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }} `
-            .
+        run: docker build -t ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }} .
 
-      # ----------------------------------------------------------
-      # Push Docker Image to GHCR
-      # ----------------------------------------------------------
       - name: Push Docker Image
-        run: |
-          docker push `
-            ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
+        run: docker push ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
 
 
   # ============================================================
@@ -93,21 +61,17 @@ jobs:
   deploy:
     name: Deploy to Docker Server
 
-    # Wait for Build job
     needs: build
 
-    # IMPORTANT:
-    # Deploy ONLY after a direct push to develop.
-    # Pull requests will NOT deploy to the server.
+    # Deploy only for direct push to develop
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
 
-    # Use the self-hosted Windows Docker server
     runs-on: self-hosted
 
     steps:
 
       # ----------------------------------------------------------
-      # Configure Docker PATH
+      # Find Docker and add it to PATH
       # ----------------------------------------------------------
       - name: Configure Docker PATH
         shell: powershell
@@ -115,11 +79,8 @@ jobs:
           $dockerCommand = Get-Command docker.exe -ErrorAction Stop
           $dockerPath = Split-Path $dockerCommand.Source
 
-          Write-Host "Docker executable:"
-          Write-Host $dockerCommand.Source
-
-          Write-Host "Docker installation path:"
-          Write-Host $dockerPath
+          Write-Host "Docker executable: $($dockerCommand.Source)"
+          Write-Host "Docker path: $dockerPath"
 
           Add-Content -Path $env:GITHUB_PATH -Value $dockerPath
 
@@ -130,13 +91,9 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Checking Docker..."
-
           where.exe docker
-
           docker --version
-
           Write-Host "Docker is available."
-
 
       # ----------------------------------------------------------
       # Login to GHCR
@@ -148,28 +105,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-
       # ----------------------------------------------------------
-      # Pull the exact image created by Build job
+      # Pull exact image created by Build job
       # ----------------------------------------------------------
       - name: Pull Docker Image
         shell: powershell
         run: |
           docker pull ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
 
-
       # ----------------------------------------------------------
-      # Stop and remove existing container
+      # Stop existing container
       # ----------------------------------------------------------
       - name: Stop Existing Container
         shell: powershell
         run: |
-          Write-Host "Removing existing poc-api container..."
-
           docker rm -f poc-api 2>$null
-
-          Write-Host "Existing container removed if it existed."
-
 
       # ----------------------------------------------------------
       # Start new container
@@ -184,20 +134,16 @@ jobs:
             -p 8091:8080 `
             ghcr.io/kmg-chandrashekhar2157/poc-api:${{ github.sha }}
 
-
       # ----------------------------------------------------------
       # Verify container
       # ----------------------------------------------------------
       - name: Verify Container
         shell: powershell
         run: |
-          Write-Host "Waiting for application to start..."
-
           Start-Sleep -Seconds 5
 
-          Write-Host "Running containers:"
+          Write-Host "===== Docker PS ====="
           docker ps
 
-          Write-Host ""
-          Write-Host "Container logs:"
+          Write-Host "===== Container Logs ====="
           docker logs poc-api --tail 30
