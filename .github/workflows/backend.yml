@@ -1,0 +1,33 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - develop
+
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Poc.Api.csproj
+
+      - name: Build
+        run: dotnet build Poc.Api.csproj --configuration Release --no-restore
+
+      - name: Publish
+        run: dotnet publish Poc.Api.csproj --configuration Release --output ./publish --no-restore
