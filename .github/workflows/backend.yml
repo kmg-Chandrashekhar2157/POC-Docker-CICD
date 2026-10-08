@@ -31,3 +31,8 @@ jobs:
 
       - name: Publish
         run: dotnet publish Poc.Api.csproj --configuration Release --output ./publish --no-restore
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t poc-api:${{ github.sha }} \
+            .
